@@ -1,0 +1,89 @@
+<script type="text/javascript">
+    RED.nodes.registerType('eqmon-name-sync', {
+        category: 'eqmon',
+        color: '#5BAD72',
+        defaults: {
+            name:       { value: '' },
+            server:     { value: '', type: 'eqmon-config', required: true },
+            interval:   { value: 300 },
+            nrPort:     { value: 1880 },
+            nrUsername: { value: 'ncdio' }
+        },
+        credentials: {
+            nrPassword: { type: 'password' }
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: 'font-awesome/fa-refresh',
+        label: function () {
+            return this.name || 'eqmon name sync';
+        },
+        inputLabels:  ['manual trigger'],
+        outputLabels: ['changes applied']
+    });
+</script>
+
+<script type="text/html" data-template-name="eqmon-name-sync">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Optional label">
+    </div>
+    <div class="form-row">
+        <label for="node-input-server"><i class="fa fa-server"></i> eqmon server</label>
+        <input type="text" id="node-input-server">
+    </div>
+    <div class="form-row">
+        <label for="node-input-interval"><i class="fa fa-clock-o"></i> Poll interval (s)</label>
+        <input type="number" id="node-input-interval" min="30" max="86400" style="width:100px">
+        <div class="form-tips">How often to check eqmon for name changes. Default: 300s (5 min).</div>
+    </div>
+    <hr>
+    <div class="form-row">
+        <label style="width:100%"><i class="fa fa-lock"></i> Local Node-RED credentials</label>
+        <div class="form-tips">Used to apply name changes to the local gateway's sensor database.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-nrPort"><i class="fa fa-plug"></i> Port</label>
+        <input type="number" id="node-input-nrPort" style="width:100px" placeholder="1880">
+    </div>
+    <div class="form-row">
+        <label for="node-input-nrUsername"><i class="fa fa-user"></i> Username</label>
+        <input type="text" id="node-input-nrUsername" placeholder="ncdio">
+    </div>
+    <div class="form-row">
+        <label for="node-input-nrPassword"><i class="fa fa-key"></i> Password</label>
+        <input type="password" id="node-input-nrPassword">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="eqmon-name-sync">
+    <p>Polls eqmon for sensor and gateway name changes, then applies them to the
+    local Atrium gateway. This enables one-way name sync: <b>eqmon → gateway</b>.</p>
+
+    <h3>How it works</h3>
+    <ol>
+        <li>Fetches current sensor names from eqmon (<code>GET /api/sensors.php</code>)</li>
+        <li>Fetches gateway name from eqmon (<code>GET /api/admin/gateways.php</code>)</li>
+        <li>Compares against a snapshot stored in flow context</li>
+        <li>For each changed name: calls <code>POST http://localhost:1880/api/sensors/:mac/meta</code></li>
+        <li>For a changed gateway name: calls <code>POST http://localhost:1880/api/gateway/config</code></li>
+    </ol>
+
+    <h3>Trigger</h3>
+    <p>Runs automatically on the configured interval. Send any message to the input
+    to trigger an immediate sync.</p>
+
+    <h3>Output</h3>
+    <p>Only fires when at least one name was changed.</p>
+    <dl class="message-properties">
+        <dt>msg.payload.applied <span class="property-type">array</span></dt>
+        <dd>List of <code>{device_id, old_name, new_name}</code> changes applied.</dd>
+        <dt>msg.payload.gateway_renamed <span class="property-type">boolean</span></dt>
+        <dd>True if the gateway name was updated.</dd>
+    </dl>
+
+    <h3>Snapshot reset</h3>
+    <p>To force a full re-apply of all names, clear the flow context keys
+    <code>eqmon_name_snapshot</code> and <code>eqmon_gw_name_snapshot</code>
+    using an <b>eqmon-hwm-reset</b> node or a Change node.</p>
+</script>

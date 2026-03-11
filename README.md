@@ -29,6 +29,15 @@ Sends a gateway heartbeat to `/sync/gateway-config` at a configurable interval. 
 
 Output wires to a standard `http request` node for TLS/auth configuration.
 
+### eqmon-name-sync
+Polls eqmon for sensor and gateway name changes, then applies them to the local Atrium gateway. This is the **eqmon → gateway** name sync direction.
+
+- Polls `GET /api/sensors.php` and `GET /api/admin/gateways.php` on the configured interval
+- Authenticates to the local Node-RED instance and calls `POST /api/sensors/:mac/meta` and `POST /api/gateway/config` for any names that changed
+- Stores a snapshot in flow context to avoid redundant updates
+- Fires an output message only when names actually changed
+- Input accepts a manual trigger message
+
 ### eqmon-hwm-reset
 Resets individual or all high-water marks stored in flow context. Use with an Inject node for manual resets, or an HTTP-in node for automated resets (e.g. after a firmware update).
 

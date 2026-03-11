@@ -22,7 +22,8 @@
       "eqmon-config": "nodes/eqmon-config.js",
       "eqmon-sync": "nodes/eqmon-sync.js",
       "eqmon-heartbeat": "nodes/eqmon-heartbeat.js",
-      "eqmon-hwm-reset": "nodes/eqmon-hwm-reset.js"
+      "eqmon-hwm-reset": "nodes/eqmon-hwm-reset.js",
+      "eqmon-name-sync": "nodes/eqmon-name-sync.js"
     }
   },
   "engines": {
