@@ -125,14 +125,15 @@ module.exports = function (RED) {
 // ---------------------------------------------------------------
 
 function syncTypeToEndpoint(syncType) {
-    // baseUrl is already the /sync root; sub-paths hang directly off it
+    // baseUrl is the /sync root (e.g. https://telemetry.ecoeyetech.com/sync)
+    // All sub-types hang as named paths under it
     const map = {
-        'readings':    '',            // POST {base}
-        'vibration':   '/vibration',  // POST {base}/vibration
-        'devices':     '/devices',    // POST {base}/devices
-        'sensor-meta': '/sensor-meta' // POST {base}/sensor-meta
+        'readings':    '/readings',     // POST {base}/readings
+        'vibration':   '/vibration',    // POST {base}/vibration
+        'devices':     '/devices',      // POST {base}/devices
+        'sensor-meta': '/sensor-meta'   // POST {base}/sensor-meta
     };
-    return map[syncType] !== undefined ? map[syncType] : '';
+    return map[syncType] || '/readings';
 }
 
 function hwmKey(syncType, deviceId) {
