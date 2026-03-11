@@ -1,0 +1,40 @@
+<script type="text/javascript">
+    RED.nodes.registerType('eqmon-config', {
+        category: 'config',
+        defaults: {
+            name:      { value: '' },
+            baseUrl:   { value: 'https://telemetry.ecoeyetech.com', required: true },
+            gatewayId: { value: '', required: true }
+        },
+        credentials: {
+            apiKey: { type: 'password' }
+        },
+        label: function () {
+            return this.name || this.gatewayId || 'eqmon config';
+        }
+    });
+</script>
+
+<script type="text/html" data-template-name="eqmon-config">
+    <div class="form-row">
+        <label for="node-config-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-config-input-name" placeholder="Optional label">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-baseUrl"><i class="fa fa-globe"></i> Base URL</label>
+        <input type="text" id="node-config-input-baseUrl" placeholder="https://telemetry.ecoeyetech.com">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-gatewayId"><i class="fa fa-server"></i> Gateway ID</label>
+        <input type="text" id="node-config-input-gatewayId" placeholder="gw_34fa402aa735">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-apiKey"><i class="fa fa-key"></i> API Key</label>
+        <input type="password" id="node-config-input-apiKey" placeholder="Gateway API key">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="eqmon-config">
+    <p>Shared configuration for eqmon gateway sync nodes.</p>
+    <p>Set the eqmon base URL, the gateway ID, and the API key issued by eqmon for this gateway.</p>
+</script>

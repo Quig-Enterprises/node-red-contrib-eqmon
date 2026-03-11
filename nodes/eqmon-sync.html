@@ -1,0 +1,75 @@
+<script type="text/javascript">
+    RED.nodes.registerType('eqmon-sync', {
+        category: 'eqmon',
+        color: '#4A90D9',
+        defaults: {
+            name:     { value: '' },
+            server:   { value: '', type: 'eqmon-config', required: true },
+            syncType: { value: 'readings' },
+            useHwm:   { value: true }
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: 'db.svg',
+        label: function () {
+            const types = {
+                'readings':    'sync readings',
+                'vibration':   'sync vibration',
+                'devices':     'sync devices',
+                'sensor-meta': 'sync sensor-meta'
+            };
+            return this.name || types[this.syncType] || 'eqmon-sync';
+        },
+        outputLabels: ['POST payload']
+    });
+</script>
+
+<script type="text/html" data-template-name="eqmon-sync">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Optional label">
+    </div>
+    <div class="form-row">
+        <label for="node-input-server"><i class="fa fa-server"></i> Server</label>
+        <input type="text" id="node-input-server">
+    </div>
+    <div class="form-row">
+        <label for="node-input-syncType"><i class="fa fa-exchange"></i> Sync type</label>
+        <select id="node-input-syncType">
+            <option value="readings">Readings (env + current)</option>
+            <option value="vibration">Vibration</option>
+            <option value="devices">Devices</option>
+            <option value="sensor-meta">Sensor metadata</option>
+        </select>
+    </div>
+    <div class="form-row">
+        <label for="node-input-useHwm"><i class="fa fa-bookmark"></i> High-water mark</label>
+        <input type="checkbox" id="node-input-useHwm" style="width:auto">
+        <span style="margin-left:6px">Only send records newer than last synced timestamp</span>
+    </div>
+</script>
+
+<script type="text/html" data-help-name="eqmon-sync">
+    <p>Formats sensor data for the eqmon sync API and emits a POST payload.</p>
+    <p>Wire the output to an <code>http request</code> node to perform the actual POST.
+    This separation lets you configure TLS, authentication, and retry logic on the
+    http request node independently.</p>
+    <h3>High-water marks</h3>
+    <p>When enabled, only records with a <code>ts</code> (millisecond timestamp) newer than
+    the last successfully synced timestamp for that device are included. This prevents
+    duplicate submissions.</p>
+    <p>HWMs are stored in flow context under <code>eqmon_hwm</code>. Use the
+    <b>eqmon-hwm-reset</b> node to clear individual entries.</p>
+    <h3>Committing HWM after success</h3>
+    <p>The outgoing message includes <code>msg.eqmon_hwm_pending</code> — an object
+    mapping HWM keys to timestamps. After a successful 2xx response, feed this back
+    to the node's <code>commit_hwm</code> input to advance the stored HWMs.</p>
+    <h3>Output</h3>
+    <dl class="message-properties">
+        <dt>msg.method</dt><dd><code>"POST"</code></dd>
+        <dt>msg.url</dt><dd>Full endpoint URL</dd>
+        <dt>msg.headers</dt><dd>Content-Type and X-Gateway-Key</dd>
+        <dt>msg.payload</dt><dd>JSON body string</dd>
+        <dt>msg.eqmon_hwm_pending</dt><dd>HWM updates to commit after 2xx</dd>
+    </dl>
+</script>

@@ -1,0 +1,65 @@
+<script type="text/javascript">
+    RED.nodes.registerType('eqmon-hwm-reset', {
+        category: 'eqmon',
+        color: '#E8A838',
+        defaults: {
+            name:     { value: '' },
+            deviceId: { value: '' },
+            syncType: { value: '' }
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: 'font-awesome/fa-eraser',
+        label: function () {
+            if (this.name) return this.name;
+            if (this.deviceId && this.deviceId !== '*') return `reset HWM: ${this.deviceId}`;
+            return 'reset HWM';
+        },
+        outputLabels: ['result']
+    });
+</script>
+
+<script type="text/html" data-template-name="eqmon-hwm-reset">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Optional label">
+    </div>
+    <div class="form-row">
+        <label for="node-input-deviceId"><i class="fa fa-microchip"></i> Device ID</label>
+        <input type="text" id="node-input-deviceId" placeholder="0013a20042388dca or * for all">
+        <div class="form-tips">Leave blank to use <code>msg.device_id</code>. Use <code>*</code> to clear all devices.</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-syncType"><i class="fa fa-filter"></i> Sync type</label>
+        <select id="node-input-syncType">
+            <option value="">All sync types</option>
+            <option value="readings">Readings</option>
+            <option value="vibration">Vibration</option>
+            <option value="devices">Devices</option>
+            <option value="sensor-meta">Sensor metadata</option>
+        </select>
+    </div>
+</script>
+
+<script type="text/html" data-help-name="eqmon-hwm-reset">
+    <p>Resets individual or all high-water marks stored in flow context.</p>
+    <p>After a reset, the next sync cycle will re-send all records for the affected
+    device(s), regardless of what was previously synced.</p>
+    <h3>Input</h3>
+    <dl class="message-properties">
+        <dt>msg.device_id <span class="property-type">string</span></dt>
+        <dd>Device ID to reset, or <code>"*"</code> for all. Overrides node config.</dd>
+        <dt>msg.sync_type <span class="property-type">string</span></dt>
+        <dd>Optional: only reset this sync type for the device.</dd>
+    </dl>
+    <h3>Output</h3>
+    <dl class="message-properties">
+        <dt>msg.payload.cleared <span class="property-type">string[]</span></dt>
+        <dd>List of HWM keys that were cleared.</dd>
+        <dt>msg.payload.remaining <span class="property-type">object</span></dt>
+        <dd>All HWM entries still in context after the reset.</dd>
+    </dl>
+    <h3>Usage</h3>
+    <p>Wire an <b>Inject</b> node to trigger a manual reset from the Node-RED editor.
+    For automated resets (e.g. after a gateway firmware update), trigger via an HTTP-in node.</p>
+</script>

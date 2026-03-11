@@ -1,0 +1,56 @@
+<script type="text/javascript">
+    RED.nodes.registerType('eqmon-heartbeat', {
+        category: 'eqmon',
+        color: '#4A90D9',
+        defaults: {
+            name:     { value: '' },
+            server:   { value: '', type: 'eqmon-config', required: true },
+            firmware: { value: '' },
+            interval: { value: 60 }
+        },
+        inputs: 0,
+        outputs: 1,
+        icon: 'timer.svg',
+        label: function () {
+            return this.name || 'eqmon heartbeat';
+        },
+        outputLabels: ['POST payload']
+    });
+</script>
+
+<script type="text/html" data-template-name="eqmon-heartbeat">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+        <input type="text" id="node-input-name" placeholder="Optional label">
+    </div>
+    <div class="form-row">
+        <label for="node-input-server"><i class="fa fa-server"></i> Server</label>
+        <input type="text" id="node-input-server">
+    </div>
+    <div class="form-row">
+        <label for="node-input-firmware"><i class="fa fa-microchip"></i> Firmware version</label>
+        <input type="text" id="node-input-firmware" placeholder="e.g. 2.1.0 or flow tag">
+        <div class="form-tips">Used by eqmon to detect gateways running outdated flows.
+        Set this to your flow release tag (e.g. <code>2026-03-11</code>).</div>
+    </div>
+    <div class="form-row">
+        <label for="node-input-interval"><i class="fa fa-clock-o"></i> Interval (s)</label>
+        <input type="number" id="node-input-interval" min="10" max="3600" style="width:100px">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="eqmon-heartbeat">
+    <p>Sends a gateway heartbeat to eqmon at a regular interval.</p>
+    <p>Wire the output to an <code>http request</code> node (POST to
+    <code>/sync/gateway-config</code>). TLS and auth are configured on the
+    http request node.</p>
+    <h3>Version reporting</h3>
+    <p>Each heartbeat includes:</p>
+    <ul>
+        <li><b>node_package_version</b> — the installed version of this npm package</li>
+        <li><b>nodered_version</b> — the Node-RED runtime version</li>
+        <li><b>firmware</b> — your flow version tag (set in node config)</li>
+    </ul>
+    <p>eqmon uses these to flag gateways running outdated node packages or flows
+    on the gateway management dashboard.</p>
+</script>
