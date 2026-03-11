@@ -52,8 +52,8 @@ module.exports = function (RED) {
             }
 
             const syncType = msg.topic || node.syncType;
-            const endpoint = syncTypeToEndpoint(syncType);
-            const url      = `${baseUrl.replace(/\/$/, '')}/${endpoint}`;
+            const suffix = syncTypeToEndpoint(syncType);
+            const url    = baseUrl.replace(/\/$/, '') + suffix;
 
             // Normalise input to array
             let records = Array.isArray(msg.payload) ? msg.payload : [msg.payload];
@@ -98,7 +98,7 @@ module.exports = function (RED) {
             };
             msg.payload = JSON.stringify(body);
 
-            node.status({ fill: 'blue', shape: 'dot', text: `${records.length} record(s) → ${endpoint}` });
+            node.status({ fill: 'blue', shape: 'dot', text: `${records.length} record(s) → ${url}` });
 
             send(msg);
             done();
@@ -125,13 +125,14 @@ module.exports = function (RED) {
 // ---------------------------------------------------------------
 
 function syncTypeToEndpoint(syncType) {
+    // baseUrl is already the /sync root; sub-paths hang directly off it
     const map = {
-        'readings':    'sync',
-        'vibration':   'sync/vibration',
-        'devices':     'sync/devices',
-        'sensor-meta': 'sync/sensor-meta'
+        'readings':    '',            // POST {base}
+        'vibration':   '/vibration',  // POST {base}/vibration
+        'devices':     '/devices',    // POST {base}/devices
+        'sensor-meta': '/sensor-meta' // POST {base}/sensor-meta
     };
-    return map[syncType] || 'sync';
+    return map[syncType] !== undefined ? map[syncType] : '';
 }
 
 function hwmKey(syncType, deviceId) {

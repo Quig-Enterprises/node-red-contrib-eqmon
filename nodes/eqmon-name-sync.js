@@ -57,13 +57,17 @@ module.exports = function (RED) {
             node.status({ fill: 'blue', shape: 'ring', text: 'checking...' });
 
             try {
+                // Derive the management API root from the sync base URL
+                // e.g. https://telemetry.ecoeyetech.com/sync → https://telemetry.ecoeyetech.com
+                const apiRoot = baseUrl.replace(/\/sync\/?$/, '');
+
                 // 1. Fetch current sensor list from eqmon (filtered to this gateway)
-                const sensorsUrl = `${baseUrl.replace(/\/$/, '')}/api/sensors.php?gateway_id=${encodeURIComponent(gatewayId)}`;
+                const sensorsUrl = `${apiRoot}/api/sensors.php?gateway_id=${encodeURIComponent(gatewayId)}`;
                 const sensorsResp = await fetchJson(sensorsUrl, { 'X-Gateway-Key': apiKey });
                 const sensors = (sensorsResp.sensors || sensorsResp.devices || []);
 
                 // 2. Fetch gateway info
-                const gwUrl = `${baseUrl.replace(/\/$/, '')}/api/admin/gateways.php?gateway_id=${encodeURIComponent(gatewayId)}`;
+                const gwUrl = `${apiRoot}/api/admin/gateways.php?gateway_id=${encodeURIComponent(gatewayId)}`;
                 let gatewayName = null;
                 try {
                     const gwResp = await fetchJson(gwUrl, { 'X-Gateway-Key': apiKey });

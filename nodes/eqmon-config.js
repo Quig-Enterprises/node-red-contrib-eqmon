@@ -11,7 +11,7 @@
 module.exports = function (RED) {
     function EqmonConfigNode(config) {
         RED.nodes.createNode(this, config);
-        this.baseUrl = config.baseUrl || 'https://telemetry.ecoeyetech.com';
+        this.baseUrl = config.baseUrl || 'https://telemetry.ecoeyetech.com/sync';
         this.gatewayId = config.gatewayId || '';
         // this.credentials.apiKey is injected by Node-RED from credential store
     }

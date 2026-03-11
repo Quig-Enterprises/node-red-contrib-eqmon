@@ -61,7 +61,8 @@ module.exports = function (RED) {
             // Remove undefined fields
             Object.keys(body).forEach(k => body[k] === undefined && delete body[k]);
 
-            const url = `${baseUrl.replace(/\/$/, '')}/sync/gateway-config`;
+            // baseUrl is the /sync root (e.g. https://telemetry.ecoeyetech.com/sync)
+            const url = `${baseUrl.replace(/\/$/, '')}/gateway-config`;
 
             const msg = {
                 method:  'POST',
