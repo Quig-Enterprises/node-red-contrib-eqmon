@@ -64,8 +64,10 @@ module.exports = function (RED) {
                 const ipAddress = getLocalIp(ifaces);
                 const uptimeSec = Math.floor((Date.now() - startTime) / 1000);
 
+                const gatewayMac = cfg.mac || node.server.gatewayMac || undefined;
                 const body = {
                     gateway_id:            gatewayId,
+                    gateway_mac:           gatewayMac,
                     hostname:              hostname,
                     ip_address:            ipAddress,
                     node_package_version:  PACKAGE_VERSION,
@@ -128,7 +130,7 @@ function readGatewayConfig(cb) {
                 const mac       = map['gateway_mac'] || null;
                 // gateway_id = "gw_" + MAC without colons, e.g. gw_34fa402aa72a
                 const gatewayId = mac ? 'gw_' + mac.replace(/:/g, '').toLowerCase() : null;
-                cb({ firmware: firmware, gatewayId: gatewayId });
+                cb({ firmware: firmware, gatewayId: gatewayId, mac: mac });
             }
         );
     });

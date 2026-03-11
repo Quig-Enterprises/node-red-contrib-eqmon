@@ -22,16 +22,20 @@ module.exports = function (RED) {
         this.gatewayId = config.gatewayId || '';
         // this.credentials.apiKey is injected by Node-RED from credential store
 
+        this.gatewayMac = ''; // populated from SQLite
         const node = this;
 
-        // Auto-detect gateway_id from SQLite if not manually configured
-        if (!node.gatewayId && sqlite3) {
+        // Auto-detect gateway_id and gateway_mac from SQLite
+        if (sqlite3) {
             const db = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READONLY, function (err) {
                 if (err) return;
                 db.get("SELECT value FROM gateway_config WHERE key = 'gateway_mac' LIMIT 1", function (err, row) {
                     db.close();
                     if (!err && row && row.value) {
-                        node.gatewayId = 'gw_' + row.value.replace(/:/g, '').toLowerCase();
+                        node.gatewayMac = row.value;
+                        if (!node.gatewayId) {
+                            node.gatewayId = 'gw_' + row.value.replace(/:/g, '').toLowerCase();
+                        }
                     }
                 });
             });

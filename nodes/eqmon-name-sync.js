@@ -1,24 +1,28 @@
 /**
- * eqmon-name-sync — Pull sensor/gateway name changes from eqmon and apply
- * them to the local gateway SQLite DB.
+ * eqmon-name-sync — Apply pending name changes delivered in heartbeat response
  *
  * Direction: eqmon → gateway (one-way)
  *
- * Polls eqmon for sensor names and gateway name, compares against a local
- * snapshot, and for each change writes directly to the local SQLite DB:
- *   - devices.sensor_name  (and sensor_meta.name)
- *   - gateway_config WHERE key = 'gateway_name'
+ * The /sync/gateway-config endpoint returns a `pending_updates` array in its
+ * response body whenever sensor or gateway names have been changed server-side.
+ * This node reads that response and writes the changes to the local SQLite DB.
  *
- * No Node-RED admin API calls needed — we write to SQLite directly.
+ * Wire it after the http request node that POSTs the heartbeat:
+ *   [eqmon-heartbeat] → [http request] → [eqmon-name-sync]
  *
- * Output fires only when at least one name changed.
- * msg.payload = { applied: [{device_id, old_name, new_name}], gateway_renamed: bool }
+ * Input (msg.payload) — the parsed JSON response from POST /sync/gateway-config:
+ *   {
+ *     "status": "ok",
+ *     "pending_updates": [
+ *       { "id": 1, "entity_type": "sensor", "device_id": "...", "new_name": "Pump Motor" },
+ *       { "id": 2, "entity_type": "gateway", "device_id": null, "new_name": "Pickerel GW" }
+ *     ]
+ *   }
+ *
+ * Output fires only when at least one name was applied.
+ * msg.payload = { applied: [{device_id, new_name, entity_type}], count: N }
  */
 'use strict';
-
-const https = require('https');
-const http  = require('http');
-const url   = require('url');
 
 let sqlite3;
 try { sqlite3 = require('sqlite3').verbose(); } catch (e) { sqlite3 = null; }
@@ -29,110 +33,79 @@ module.exports = function (RED) {
     function EqmonNameSyncNode(config) {
         RED.nodes.createNode(this, config);
 
-        this.server   = RED.nodes.getNode(config.server);
-        this.interval = parseInt(config.interval, 10) || 300;
-
         const node = this;
-        let timer = null;
 
-        function doSync() {
-            if (!node.server) {
-                node.warn('No eqmon config node selected');
+        node.on('input', function (msg, send, done) {
+            // Accept either the raw http-request response (msg.payload is object)
+            // or a pre-parsed object passed directly.
+            let body = msg.payload;
+            if (typeof body === 'string') {
+                try { body = JSON.parse(body); } catch (e) {
+                    // Not JSON — nothing to do
+                    send([null, msg]);
+                    done();
+                    return;
+                }
+            }
+
+            const pendingUpdates = Array.isArray(body && body.pending_updates)
+                ? body.pending_updates : [];
+
+            if (pendingUpdates.length === 0) {
+                node.status({ fill: 'grey', shape: 'ring', text: 'no name updates' });
+                send([null, msg]);
+                done();
                 return;
             }
 
-            // apiRoot = base URL with /sync stripped
-            const apiRoot   = node.server.baseUrl.replace(/\/sync\/?$/, '');
-            const gatewayId = node.server.gatewayId;
-            const apiKey    = node.server.credentials && node.server.credentials.apiKey;
+            const tasks = [];
+            const applied = [];
 
-            if (!gatewayId || !apiKey) {
-                node.warn('eqmon-config missing gateway_id or API key');
-                return;
+            for (const update of pendingUpdates) {
+                const entityType = update.entity_type;
+                const newName    = update.new_name;
+
+                if (!newName) continue;
+
+                if (entityType === 'sensor' && update.device_id) {
+                    const deviceId = update.device_id;
+                    tasks.push(function (cb) {
+                        writeSensorName(deviceId, newName, function (err) {
+                            if (err) {
+                                node.warn('eqmon-name-sync: DB write failed for ' + deviceId + ': ' + err);
+                            } else {
+                                applied.push({ device_id: deviceId, new_name: newName, entity_type: 'sensor' });
+                            }
+                            cb();
+                        });
+                    });
+                } else if (entityType === 'gateway') {
+                    tasks.push(function (cb) {
+                        writeGatewayName(newName, function (err) {
+                            if (err) {
+                                node.warn('eqmon-name-sync: gateway name write failed: ' + err);
+                            } else {
+                                applied.push({ device_id: null, new_name: newName, entity_type: 'gateway' });
+                            }
+                            cb();
+                        });
+                    });
+                }
             }
 
-            // Fetch sensors from eqmon
-            fetchJson(apiRoot + '/api/sensors.php?gateway_id=' + encodeURIComponent(gatewayId), apiKey, function (err, sensors) {
-                if (err) { node.warn('eqmon-name-sync: sensors fetch failed: ' + err); return; }
+            runSerial(tasks, function () {
+                if (applied.length === 0) {
+                    node.status({ fill: 'grey', shape: 'ring', text: 'no changes written' });
+                    send([null, msg]);
+                    done();
+                    return;
+                }
 
-                // Fetch gateway info
-                fetchJson(apiRoot + '/api/admin/gateways.php?gateway_id=' + encodeURIComponent(gatewayId), apiKey, function (err2, gwData) {
-                    if (err2) { node.warn('eqmon-name-sync: gateway fetch failed: ' + err2); }
-
-                    const prevSnapshot  = node.context().flow.get('eqmon_name_snapshot')  || {};
-                    const prevGwName    = node.context().flow.get('eqmon_gw_name_snapshot') || null;
-
-                    const applied = [];
-                    const tasks   = [];
-
-                    // ── Sensor names ──────────────────────────────────────────
-                    const sensorList = Array.isArray(sensors) ? sensors
-                        : (sensors && Array.isArray(sensors.sensors)) ? sensors.sensors : [];
-
-                    sensorList.forEach(function (s) {
-                        const deviceId = s.device_id;
-                        const newName  = s.sensor_name || s.name;
-                        if (!deviceId || !newName) return;
-
-                        const oldName = prevSnapshot[deviceId];
-                        if (oldName === newName) return; // no change
-
-                        tasks.push(function (done) {
-                            writeSensorName(deviceId, newName, function (err) {
-                                if (err) { node.warn('eqmon-name-sync: DB write failed for ' + deviceId + ': ' + err); }
-                                else {
-                                    applied.push({ device_id: deviceId, old_name: oldName || null, new_name: newName });
-                                }
-                                done();
-                            });
-                        });
-                    });
-
-                    // ── Gateway name ──────────────────────────────────────────
-                    const newGwName = gwData && (gwData.gateway_name || (Array.isArray(gwData) && gwData[0] && gwData[0].gateway_name));
-                    let gatewayRenamed = false;
-
-                    if (newGwName && newGwName !== prevGwName) {
-                        tasks.push(function (done) {
-                            writeGatewayName(newGwName, function (err) {
-                                if (err) { node.warn('eqmon-name-sync: gateway name DB write failed: ' + err); }
-                                else { gatewayRenamed = true; }
-                                done();
-                            });
-                        });
-                    }
-
-                    // Run all tasks, then update snapshots and emit
-                    runSerial(tasks, function () {
-                        if (applied.length === 0 && !gatewayRenamed) {
-                            node.status({ fill: 'grey', shape: 'ring', text: 'no changes @ ' + new Date().toLocaleTimeString() });
-                            return;
-                        }
-
-                        // Persist updated snapshot
-                        const newSnapshot = Object.assign({}, prevSnapshot);
-                        applied.forEach(function (a) { newSnapshot[a.device_id] = a.new_name; });
-                        node.context().flow.set('eqmon_name_snapshot', newSnapshot);
-                        if (gatewayRenamed) {
-                            node.context().flow.set('eqmon_gw_name_snapshot', newGwName);
-                        }
-
-                        node.status({ fill: 'green', shape: 'dot', text: applied.length + ' name(s) updated' });
-                        node.send({ payload: { applied: applied, gateway_renamed: gatewayRenamed } });
-                    });
-                });
+                node.status({ fill: 'green', shape: 'dot', text: applied.length + ' name(s) updated' });
+                msg.payload = { applied: applied, count: applied.length };
+                send([msg, null]);
+                done();
             });
-        }
-
-        // Input: manual trigger
-        node.on('input', function () { doSync(); });
-
-        // Kick off on deploy, then on interval
-        doSync();
-        timer = setInterval(doSync, node.interval * 1000);
-
-        node.on('close', function () {
-            if (timer) clearInterval(timer);
         });
     }
 
@@ -152,7 +125,6 @@ function writeSensorName(deviceId, name, cb) {
             [name, deviceId],
             function (err) {
                 if (err) { db.close(); cb(err.message); return; }
-                // Also upsert sensor_meta.name
                 db.run(
                     'INSERT INTO sensor_meta (device_id, name) VALUES (?, ?) ON CONFLICT(device_id) DO UPDATE SET name = excluded.name',
                     [deviceId, name],
@@ -179,34 +151,6 @@ function writeGatewayName(name, cb) {
             }
         );
     });
-}
-
-// ---------------------------------------------------------------
-//  HTTP helpers
-// ---------------------------------------------------------------
-
-function fetchJson(rawUrl, apiKey, cb) {
-    const parsed   = url.parse(rawUrl);
-    const lib      = parsed.protocol === 'https:' ? https : http;
-    const options  = {
-        hostname: parsed.hostname,
-        port:     parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-        path:     parsed.path,
-        method:   'GET',
-        headers:  { 'Accept': 'application/json', 'X-Gateway-Key': apiKey },
-        rejectUnauthorized: false
-    };
-
-    const req = lib.request(options, function (res) {
-        let data = '';
-        res.on('data', function (c) { data += c; });
-        res.on('end', function () {
-            try { cb(null, JSON.parse(data)); }
-            catch (e) { cb('JSON parse error: ' + e.message); }
-        });
-    });
-    req.on('error', function (e) { cb(e.message); });
-    req.end();
 }
 
 function runSerial(tasks, done) {
