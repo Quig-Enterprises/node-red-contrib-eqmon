@@ -1,6 +1,6 @@
 <script type="text/javascript">
     RED.nodes.registerType('eqmon-hwm-reset', {
-        category: 'eqmon',
+        category: 'EcoEye',
         color: '#E8A838',
         defaults: {
             name:     { value: '' },
@@ -12,8 +12,8 @@
         icon: 'font-awesome/fa-eraser',
         label: function () {
             if (this.name) return this.name;
-            if (this.deviceId && this.deviceId !== '*') return `reset HWM: ${this.deviceId}`;
-            return 'reset HWM';
+            if (this.deviceId && this.deviceId !== '*') return 'EcoEye reset HWM: ' + this.deviceId;
+            return 'EcoEye reset HWM';
         },
         outputLabels: ['result']
     });

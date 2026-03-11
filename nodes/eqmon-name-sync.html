@@ -1,22 +1,17 @@
 <script type="text/javascript">
     RED.nodes.registerType('eqmon-name-sync', {
-        category: 'eqmon',
+        category: 'EcoEye',
         color: '#5BAD72',
         defaults: {
             name:       { value: '' },
             server:     { value: '', type: 'eqmon-config', required: true },
-            interval:   { value: 300 },
-            nrPort:     { value: 1880 },
-            nrUsername: { value: 'ncdio' }
-        },
-        credentials: {
-            nrPassword: { type: 'password' }
+            interval:   { value: 300 }
         },
         inputs: 1,
         outputs: 1,
         icon: 'font-awesome/fa-refresh',
         label: function () {
-            return this.name || 'eqmon name sync';
+            return this.name || 'EcoEye name sync';
         },
         inputLabels:  ['manual trigger'],
         outputLabels: ['changes applied']
@@ -37,23 +32,7 @@
         <input type="number" id="node-input-interval" min="30" max="86400" style="width:100px">
         <div class="form-tips">How often to check eqmon for name changes. Default: 300s (5 min).</div>
     </div>
-    <hr>
-    <div class="form-row">
-        <label style="width:100%"><i class="fa fa-lock"></i> Local Node-RED credentials</label>
-        <div class="form-tips">Used to apply name changes to the local gateway's sensor database.</div>
-    </div>
-    <div class="form-row">
-        <label for="node-input-nrPort"><i class="fa fa-plug"></i> Port</label>
-        <input type="number" id="node-input-nrPort" style="width:100px" placeholder="1880">
-    </div>
-    <div class="form-row">
-        <label for="node-input-nrUsername"><i class="fa fa-user"></i> Username</label>
-        <input type="text" id="node-input-nrUsername" placeholder="ncdio">
-    </div>
-    <div class="form-row">
-        <label for="node-input-nrPassword"><i class="fa fa-key"></i> Password</label>
-        <input type="password" id="node-input-nrPassword">
-    </div>
+    <div class="form-tips" style="margin-top:8px">Name changes are written directly to the local SQLite database (<code>/overlay/telemetry.db</code>). No Node-RED credentials required.</div>
 </script>
 
 <script type="text/html" data-help-name="eqmon-name-sync">
@@ -65,8 +44,8 @@
         <li>Fetches current sensor names from eqmon (<code>GET /api/sensors.php</code>)</li>
         <li>Fetches gateway name from eqmon (<code>GET /api/admin/gateways.php</code>)</li>
         <li>Compares against a snapshot stored in flow context</li>
-        <li>For each changed name: calls <code>POST http://localhost:1880/api/sensors/:mac/meta</code></li>
-        <li>For a changed gateway name: calls <code>POST http://localhost:1880/api/gateway/config</code></li>
+        <li>For each changed name: writes to <code>devices.sensor_name</code> and <code>sensor_meta.name</code> in the local SQLite DB</li>
+        <li>For a changed gateway name: writes to <code>gateway_config</code> table</li>
     </ol>
 
     <h3>Trigger</h3>

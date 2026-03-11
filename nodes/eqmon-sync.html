@@ -1,6 +1,6 @@
 <script type="text/javascript">
     RED.nodes.registerType('eqmon-sync', {
-        category: 'eqmon',
+        category: 'EcoEye',
         color: '#4A90D9',
         defaults: {
             name:     { value: '' },
@@ -13,12 +13,12 @@
         icon: 'db.svg',
         label: function () {
             const types = {
-                'readings':    'sync readings',
-                'vibration':   'sync vibration',
-                'devices':     'sync devices',
-                'sensor-meta': 'sync sensor-meta'
+                'readings':    'EcoEye sync readings',
+                'vibration':   'EcoEye sync vibration',
+                'devices':     'EcoEye sync devices',
+                'sensor-meta': 'EcoEye sync sensor-meta'
             };
-            return this.name || types[this.syncType] || 'eqmon-sync';
+            return this.name || types[this.syncType] || 'EcoEye sync';
         },
         outputLabels: ['POST payload']
     });

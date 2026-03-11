@@ -2,11 +2,15 @@
  * eqmon-heartbeat — Gateway heartbeat / config sync node
  *
  * Emits a POST payload to /sync/gateway-config on a configurable interval.
+ * Firmware version and gateway_id are read automatically from the local
+ * SQLite gateway_config table (no manual configuration required).
+ *
  * Includes:
- *   - gateway_id, hostname, ip_address
- *   - node_package_version (this npm package version — lets eqmon flag outdated nodes)
- *   - nodered_version (runtime version)
- *   - firmware (configurable string — e.g. flow version tag)
+ *   - gateway_id         (derived from gateway_mac in gateway_config)
+ *   - hostname, ip_address
+ *   - node_package_version (this npm package version)
+ *   - nodered_version    (runtime version)
+ *   - firmware           (platform_version from gateway_config table)
  *   - uptime_seconds
  *
  * Output 1 — POST payload (wire to http request node for TLS/auth config)
@@ -14,14 +18,20 @@
 'use strict';
 
 const os             = require('os');
+const path           = require('path');
 const { PACKAGE_VERSION } = require('../lib/version');
+
+// SQLite3 — bundled with the Atrium gateway; if not available fall back to null
+let sqlite3;
+try { sqlite3 = require('sqlite3').verbose(); } catch (e) { sqlite3 = null; }
+
+const DB_PATH = '/overlay/telemetry.db';
 
 module.exports = function (RED) {
     function EqmonHeartbeatNode(config) {
         RED.nodes.createNode(this, config);
 
         this.server   = RED.nodes.getNode(config.server);
-        this.firmware = config.firmware || '';          // e.g. flow version tag
         this.interval = parseInt(config.interval, 10) || 60; // seconds
 
         const node = this;
@@ -35,47 +45,53 @@ module.exports = function (RED) {
             }
 
             const baseUrl   = node.server.baseUrl;
-            const gatewayId = node.server.gatewayId;
             const apiKey    = node.server.credentials && node.server.credentials.apiKey;
 
-            if (!gatewayId || !apiKey) {
-                node.warn('eqmon-config is missing gateway_id or API key');
+            if (!apiKey) {
+                node.warn('eqmon-config is missing API key');
                 return;
             }
 
-            const hostname   = os.hostname();
-            const interfaces = os.networkInterfaces();
-            const ipAddress  = getLocalIp(interfaces);
-            const uptimeSec  = Math.floor((Date.now() - startTime) / 1000);
+            readGatewayConfig(function (cfg) {
+                const gatewayId = cfg.gatewayId || node.server.gatewayId;
+                if (!gatewayId) {
+                    node.warn('Cannot determine gateway_id (no gateway_mac in DB and none in config)');
+                    return;
+                }
 
-            const body = {
-                gateway_id:            gatewayId,
-                hostname:              hostname,
-                ip_address:            ipAddress,
-                node_package_version:  PACKAGE_VERSION,
-                nodered_version:       RED.version ? RED.version() : 'unknown',
-                firmware:              node.firmware || undefined,
-                uptime_seconds:        uptimeSec
-            };
+                const hostname  = os.hostname();
+                const ifaces    = os.networkInterfaces();
+                const ipAddress = getLocalIp(ifaces);
+                const uptimeSec = Math.floor((Date.now() - startTime) / 1000);
 
-            // Remove undefined fields
-            Object.keys(body).forEach(k => body[k] === undefined && delete body[k]);
+                const body = {
+                    gateway_id:            gatewayId,
+                    hostname:              hostname,
+                    ip_address:            ipAddress,
+                    node_package_version:  PACKAGE_VERSION,
+                    nodered_version:       RED.version ? RED.version() : 'unknown',
+                    firmware:              cfg.firmware || undefined,
+                    uptime_seconds:        uptimeSec
+                };
 
-            // baseUrl is the /sync root (e.g. https://telemetry.ecoeyetech.com/sync)
-            const url = `${baseUrl.replace(/\/$/, '')}/gateway-config`;
+                // Remove undefined fields
+                Object.keys(body).forEach(k => body[k] === undefined && delete body[k]);
 
-            const msg = {
-                method:  'POST',
-                url:     url,
-                headers: {
-                    'Content-Type':  'application/json',
-                    'X-Gateway-Key': apiKey
-                },
-                payload: JSON.stringify(body)
-            };
+                const url = baseUrl.replace(/\/$/, '') + '/gateway-config';
 
-            node.status({ fill: 'green', shape: 'dot', text: `sent @ ${new Date().toLocaleTimeString()}` });
-            node.send(msg);
+                const msg = {
+                    method:  'POST',
+                    url:     url,
+                    headers: {
+                        'Content-Type':  'application/json',
+                        'X-Gateway-Key': apiKey
+                    },
+                    payload: JSON.stringify(body)
+                };
+
+                node.status({ fill: 'green', shape: 'dot', text: 'sent @ ' + new Date().toLocaleTimeString() });
+                node.send(msg);
+            });
         }
 
         // Send immediately on deploy, then on interval
@@ -89,6 +105,34 @@ module.exports = function (RED) {
 
     RED.nodes.registerType('eqmon-heartbeat', EqmonHeartbeatNode);
 };
+
+// ---------------------------------------------------------------
+//  Read firmware + gateway_id from local SQLite DB
+// ---------------------------------------------------------------
+
+function readGatewayConfig(cb) {
+    if (!sqlite3) {
+        cb({ firmware: null, gatewayId: null });
+        return;
+    }
+    const db = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READONLY, function (err) {
+        if (err) { cb({ firmware: null, gatewayId: null }); return; }
+        db.all(
+            "SELECT key, value FROM gateway_config WHERE key IN ('platform_version','gateway_mac')",
+            function (err, rows) {
+                db.close();
+                if (err || !rows) { cb({ firmware: null, gatewayId: null }); return; }
+                const map = {};
+                rows.forEach(function (r) { map[r.key] = r.value; });
+                const firmware  = map['platform_version'] || null;
+                const mac       = map['gateway_mac'] || null;
+                // gateway_id = "gw_" + MAC without colons, e.g. gw_34fa402aa72a
+                const gatewayId = mac ? 'gw_' + mac.replace(/:/g, '').toLowerCase() : null;
+                cb({ firmware: firmware, gatewayId: gatewayId });
+            }
+        );
+    });
+}
 
 // ---------------------------------------------------------------
 //  Helpers

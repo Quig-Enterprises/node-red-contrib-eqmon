@@ -3,14 +3,14 @@
         category: 'config',
         defaults: {
             name:      { value: '' },
-            baseUrl:   { value: 'https://telemetry.ecoeyetech.com', required: true },
-            gatewayId: { value: '', required: true }
+            baseUrl:   { value: 'https://telemetry.ecoeyetech.com/sync', required: true },
+            gatewayId: { value: '' }
         },
         credentials: {
             apiKey: { type: 'password' }
         },
         label: function () {
-            return this.name || this.gatewayId || 'eqmon config';
+            return this.name || this.gatewayId || 'EcoEye config';
         }
     });
 </script>
@@ -26,7 +26,8 @@
     </div>
     <div class="form-row">
         <label for="node-config-input-gatewayId"><i class="fa fa-server"></i> Gateway ID</label>
-        <input type="text" id="node-config-input-gatewayId" placeholder="gw_34fa402aa735">
+        <input type="text" id="node-config-input-gatewayId" placeholder="auto-detected from gateway_mac">
+        <div class="form-tips">Leave blank to auto-detect from the local SQLite DB (<code>gateway_config.gateway_mac</code>).</div>
     </div>
     <div class="form-row">
         <label for="node-config-input-apiKey"><i class="fa fa-key"></i> API Key</label>
@@ -35,6 +36,7 @@
 </script>
 
 <script type="text/html" data-help-name="eqmon-config">
-    <p>Shared configuration for eqmon gateway sync nodes.</p>
-    <p>Set the eqmon base URL, the gateway ID, and the API key issued by eqmon for this gateway.</p>
+    <p>Shared configuration for EcoEye gateway sync nodes.</p>
+    <p>Set the eqmon base URL and the API key issued by eqmon for this gateway.</p>
+    <p>The <b>Gateway ID</b> is auto-detected from <code>gateway_config.gateway_mac</code> in the local SQLite DB if left blank.</p>
 </script>

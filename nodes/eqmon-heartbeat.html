@@ -1,18 +1,17 @@
 <script type="text/javascript">
     RED.nodes.registerType('eqmon-heartbeat', {
-        category: 'eqmon',
+        category: 'EcoEye',
         color: '#4A90D9',
         defaults: {
             name:     { value: '' },
             server:   { value: '', type: 'eqmon-config', required: true },
-            firmware: { value: '' },
             interval: { value: 60 }
         },
         inputs: 0,
         outputs: 1,
         icon: 'timer.svg',
         label: function () {
-            return this.name || 'eqmon heartbeat';
+            return this.name || 'EcoEye heartbeat';
         },
         outputLabels: ['POST payload']
     });
@@ -26,12 +25,6 @@
     <div class="form-row">
         <label for="node-input-server"><i class="fa fa-server"></i> Server</label>
         <input type="text" id="node-input-server">
-    </div>
-    <div class="form-row">
-        <label for="node-input-firmware"><i class="fa fa-microchip"></i> Firmware version</label>
-        <input type="text" id="node-input-firmware" placeholder="e.g. 2.1.0 or flow tag">
-        <div class="form-tips">Used by eqmon to detect gateways running outdated flows.
-        Set this to your flow release tag (e.g. <code>2026-03-11</code>).</div>
     </div>
     <div class="form-row">
         <label for="node-input-interval"><i class="fa fa-clock-o"></i> Interval (s)</label>
@@ -49,8 +42,9 @@
     <ul>
         <li><b>node_package_version</b> — the installed version of this npm package</li>
         <li><b>nodered_version</b> — the Node-RED runtime version</li>
-        <li><b>firmware</b> — your flow version tag (set in node config)</li>
+        <li><b>firmware</b> — automatically read from <code>gateway_config.platform_version</code> in the local SQLite DB</li>
+        <li><b>gateway_id</b> — automatically derived from <code>gateway_config.gateway_mac</code></li>
     </ul>
-    <p>eqmon uses these to flag gateways running outdated node packages or flows
+    <p>eqmon uses these to flag gateways running outdated firmware or node packages
     on the gateway management dashboard.</p>
 </script>

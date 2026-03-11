@@ -1,281 +1,215 @@
 /**
- * eqmon-name-sync — Inbound name sync node (eqmon → gateway)
+ * eqmon-name-sync — Pull sensor/gateway name changes from eqmon and apply
+ * them to the local gateway SQLite DB.
  *
- * Polls eqmon for sensor names and gateway name, then applies any changes
- * to the local Atrium gateway by calling the gateway's own Node-RED HTTP API
- * on localhost.
+ * Direction: eqmon → gateway (one-way)
  *
- * Flow:
- *   1. GET {eqmon}/api/sensors.php  (using gateway API key)
- *   2. GET {eqmon}/api/admin/gateways.php?gateway_id=X  (gateway name)
- *   3. Compare against snapshot stored in flow context
- *   4. For each changed sensor name: POST http://localhost:1880/api/sensors/:mac/meta
- *   5. For changed gateway name:    POST http://localhost:1880/api/gateway/config
- *   6. Save new snapshot
+ * Polls eqmon for sensor names and gateway name, compares against a local
+ * snapshot, and for each change writes directly to the local SQLite DB:
+ *   - devices.sensor_name  (and sensor_meta.name)
+ *   - gateway_config WHERE key = 'gateway_name'
  *
- * Output 1 — summary msg (fires only when changes were applied):
- *   msg.payload = { applied: [{device_id, old_name, new_name}], gateway_renamed: bool }
+ * No Node-RED admin API calls needed — we write to SQLite directly.
  *
- * No output is emitted when nothing changed.
- *
- * Auth:
- *   eqmon calls use X-Gateway-Key header (same key as sync nodes).
- *   Local Node-RED calls use the node-red admin token obtained via the
- *   config node credentials (nodered_username / nodered_password).
+ * Output fires only when at least one name changed.
+ * msg.payload = { applied: [{device_id, old_name, new_name}], gateway_renamed: bool }
  */
 'use strict';
 
-const http  = require('http');
 const https = require('https');
+const http  = require('http');
+const url   = require('url');
+
+let sqlite3;
+try { sqlite3 = require('sqlite3').verbose(); } catch (e) { sqlite3 = null; }
+
+const DB_PATH = '/overlay/telemetry.db';
 
 module.exports = function (RED) {
     function EqmonNameSyncNode(config) {
         RED.nodes.createNode(this, config);
 
-        this.server         = RED.nodes.getNode(config.server);
-        this.interval       = parseInt(config.interval, 10) || 300; // seconds, default 5 min
-        this.nrPort         = parseInt(config.nrPort, 10)   || 1880;
-        this.nrUsername     = config.nrUsername || 'ncdio';
-        // nrPassword stored in credentials
-        this.nrPassword     = this.credentials && this.credentials.nrPassword;
+        this.server   = RED.nodes.getNode(config.server);
+        this.interval = parseInt(config.interval, 10) || 300;
 
         const node = this;
-        let timer  = null;
+        let timer = null;
 
-        async function syncNames() {
-            if (!node.server) return;
+        function doSync() {
+            if (!node.server) {
+                node.warn('No eqmon config node selected');
+                return;
+            }
 
-            const baseUrl   = node.server.baseUrl;
+            // apiRoot = base URL with /sync stripped
+            const apiRoot   = node.server.baseUrl.replace(/\/sync\/?$/, '');
             const gatewayId = node.server.gatewayId;
             const apiKey    = node.server.credentials && node.server.credentials.apiKey;
 
             if (!gatewayId || !apiKey) {
-                node.warn('eqmon-config is missing gateway_id or API key');
+                node.warn('eqmon-config missing gateway_id or API key');
                 return;
             }
 
-            node.status({ fill: 'blue', shape: 'ring', text: 'checking...' });
+            // Fetch sensors from eqmon
+            fetchJson(apiRoot + '/api/sensors.php?gateway_id=' + encodeURIComponent(gatewayId), apiKey, function (err, sensors) {
+                if (err) { node.warn('eqmon-name-sync: sensors fetch failed: ' + err); return; }
 
-            try {
-                // Derive the management API root from the sync base URL
-                // e.g. https://telemetry.ecoeyetech.com/sync → https://telemetry.ecoeyetech.com
-                const apiRoot = baseUrl.replace(/\/sync\/?$/, '');
+                // Fetch gateway info
+                fetchJson(apiRoot + '/api/admin/gateways.php?gateway_id=' + encodeURIComponent(gatewayId), apiKey, function (err2, gwData) {
+                    if (err2) { node.warn('eqmon-name-sync: gateway fetch failed: ' + err2); }
 
-                // 1. Fetch current sensor list from eqmon (filtered to this gateway)
-                const sensorsUrl = `${apiRoot}/api/sensors.php?gateway_id=${encodeURIComponent(gatewayId)}`;
-                const sensorsResp = await fetchJson(sensorsUrl, { 'X-Gateway-Key': apiKey });
-                const sensors = (sensorsResp.sensors || sensorsResp.devices || []);
+                    const prevSnapshot  = node.context().flow.get('eqmon_name_snapshot')  || {};
+                    const prevGwName    = node.context().flow.get('eqmon_gw_name_snapshot') || null;
 
-                // 2. Fetch gateway info
-                const gwUrl = `${apiRoot}/api/admin/gateways.php?gateway_id=${encodeURIComponent(gatewayId)}`;
-                let gatewayName = null;
-                try {
-                    const gwResp = await fetchJson(gwUrl, { 'X-Gateway-Key': apiKey });
-                    gatewayName = gwResp.gateway_name || gwResp.name || null;
-                } catch (_) { /* non-fatal */ }
+                    const applied = [];
+                    const tasks   = [];
 
-                // 3. Load snapshot from context
-                const snapshot    = node.context().flow.get('eqmon_name_snapshot') || {};
-                const gwSnapshot  = node.context().flow.get('eqmon_gw_name_snapshot') || null;
+                    // ── Sensor names ──────────────────────────────────────────
+                    const sensorList = Array.isArray(sensors) ? sensors
+                        : (sensors && Array.isArray(sensors.sensors)) ? sensors.sensors : [];
 
-                // 4. Authenticate to local Node-RED
-                let nrToken = null;
-                try {
-                    nrToken = await getNrToken(node.nrPort, node.nrUsername, node.nrPassword);
-                } catch (e) {
-                    node.warn(`Local Node-RED auth failed: ${e.message}`);
-                }
+                    sensorList.forEach(function (s) {
+                        const deviceId = s.device_id;
+                        const newName  = s.sensor_name || s.name;
+                        if (!deviceId || !newName) return;
 
-                const applied = [];
+                        const oldName = prevSnapshot[deviceId];
+                        if (oldName === newName) return; // no change
 
-                // 5. Apply sensor name changes
-                for (const sensor of sensors) {
-                    const deviceId   = sensor.device_id;
-                    const newName    = sensor.name || sensor.sensor_name || null;
-                    if (!deviceId || !newName) continue;
-
-                    const oldName = snapshot[deviceId] || null;
-                    if (newName === oldName) continue;
-
-                    // Format device_id as colon MAC for gateway API
-                    const colonMac = toColonMac(deviceId);
-                    if (!colonMac) continue;
-
-                    if (nrToken) {
-                        try {
-                            await postJson(
-                                node.nrPort,
-                                `/api/sensors/${encodeURIComponent(colonMac)}/meta`,
-                                { sensor_name: newName },
-                                nrToken
-                            );
-                            applied.push({ device_id: deviceId, old_name: oldName, new_name: newName });
-                            snapshot[deviceId] = newName;
-                        } catch (e) {
-                            node.warn(`Failed to update ${deviceId}: ${e.message}`);
-                        }
-                    } else {
-                        // No NR token — just track what would have changed
-                        applied.push({ device_id: deviceId, old_name: oldName, new_name: newName, dry_run: true });
-                    }
-                }
-
-                // 6. Apply gateway name change
-                let gatewayRenamed = false;
-                if (gatewayName && gatewayName !== gwSnapshot && nrToken) {
-                    try {
-                        await postJson(node.nrPort, '/api/gateway/config', { gateway_name: gatewayName }, nrToken);
-                        gatewayRenamed = true;
-                        node.context().flow.set('eqmon_gw_name_snapshot', gatewayName);
-                    } catch (e) {
-                        node.warn(`Failed to update gateway name: ${e.message}`);
-                    }
-                }
-
-                // 7. Save updated snapshot
-                node.context().flow.set('eqmon_name_snapshot', snapshot);
-
-                if (applied.length > 0 || gatewayRenamed) {
-                    const summary = `${applied.length} sensor(s)${gatewayRenamed ? ' + gateway' : ''} renamed`;
-                    node.status({ fill: 'green', shape: 'dot', text: summary });
-                    node.send({
-                        payload: { applied, gateway_renamed: gatewayRenamed },
-                        topic:   'eqmon-name-sync'
+                        tasks.push(function (done) {
+                            writeSensorName(deviceId, newName, function (err) {
+                                if (err) { node.warn('eqmon-name-sync: DB write failed for ' + deviceId + ': ' + err); }
+                                else {
+                                    applied.push({ device_id: deviceId, old_name: oldName || null, new_name: newName });
+                                }
+                                done();
+                            });
+                        });
                     });
-                } else {
-                    node.status({ fill: 'grey', shape: 'ring', text: `synced @ ${new Date().toLocaleTimeString()}` });
-                }
 
-            } catch (e) {
-                node.status({ fill: 'red', shape: 'ring', text: e.message });
-                node.error(`eqmon-name-sync: ${e.message}`);
-            }
+                    // ── Gateway name ──────────────────────────────────────────
+                    const newGwName = gwData && (gwData.gateway_name || (Array.isArray(gwData) && gwData[0] && gwData[0].gateway_name));
+                    let gatewayRenamed = false;
+
+                    if (newGwName && newGwName !== prevGwName) {
+                        tasks.push(function (done) {
+                            writeGatewayName(newGwName, function (err) {
+                                if (err) { node.warn('eqmon-name-sync: gateway name DB write failed: ' + err); }
+                                else { gatewayRenamed = true; }
+                                done();
+                            });
+                        });
+                    }
+
+                    // Run all tasks, then update snapshots and emit
+                    runSerial(tasks, function () {
+                        if (applied.length === 0 && !gatewayRenamed) {
+                            node.status({ fill: 'grey', shape: 'ring', text: 'no changes @ ' + new Date().toLocaleTimeString() });
+                            return;
+                        }
+
+                        // Persist updated snapshot
+                        const newSnapshot = Object.assign({}, prevSnapshot);
+                        applied.forEach(function (a) { newSnapshot[a.device_id] = a.new_name; });
+                        node.context().flow.set('eqmon_name_snapshot', newSnapshot);
+                        if (gatewayRenamed) {
+                            node.context().flow.set('eqmon_gw_name_snapshot', newGwName);
+                        }
+
+                        node.status({ fill: 'green', shape: 'dot', text: applied.length + ' name(s) updated' });
+                        node.send({ payload: { applied: applied, gateway_renamed: gatewayRenamed } });
+                    });
+                });
+            });
         }
 
-        // Run immediately on deploy, then on interval
-        syncNames();
-        timer = setInterval(syncNames, node.interval * 1000);
+        // Input: manual trigger
+        node.on('input', function () { doSync(); });
 
-        node.on('input', function (_msg, _send, done) {
-            // Manual trigger
-            syncNames().then(() => done()).catch(e => done(e));
-        });
+        // Kick off on deploy, then on interval
+        doSync();
+        timer = setInterval(doSync, node.interval * 1000);
 
         node.on('close', function () {
             if (timer) clearInterval(timer);
         });
     }
 
-    RED.nodes.registerType('eqmon-name-sync', EqmonNameSyncNode, {
-        credentials: {
-            nrPassword: { type: 'password' }
-        }
-    });
+    RED.nodes.registerType('eqmon-name-sync', EqmonNameSyncNode);
 };
 
 // ---------------------------------------------------------------
-//  Helpers
+//  SQLite helpers
 // ---------------------------------------------------------------
 
-function toColonMac(deviceId) {
-    if (!deviceId) return null;
-    const raw = deviceId.replace(/:/g, '');
-    if (raw.length % 2 !== 0) return null;
-    return raw.match(/.{2}/g).join(':');
-}
-
-function fetchJson(url, headers = {}) {
-    return new Promise((resolve, reject) => {
-        const lib      = url.startsWith('https') ? https : http;
-        const reqHeaders = { 'Accept': 'application/json', ...headers };
-
-        lib.get(url, { headers: reqHeaders }, (res) => {
-            let body = '';
-            res.on('data', chunk => body += chunk);
-            res.on('end', () => {
-                try {
-                    resolve(JSON.parse(body));
-                } catch (e) {
-                    reject(new Error(`Invalid JSON from ${url}: ${body.slice(0, 100)}`));
-                }
-            });
-        }).on('error', reject);
-    });
-}
-
-function postJson(port, path, data, bearerToken) {
-    return new Promise((resolve, reject) => {
-        const body = JSON.stringify(data);
-        const opts = {
-            hostname: 'localhost',
-            port:     port,
-            path:     path,
-            method:   'POST',
-            headers:  {
-                'Content-Type':   'application/json',
-                'Content-Length': Buffer.byteLength(body),
-                'Authorization':  `Bearer ${bearerToken}`
-            }
-        };
-
-        const req = http.request(opts, (res) => {
-            let respBody = '';
-            res.on('data', chunk => respBody += chunk);
-            res.on('end', () => {
-                if (res.statusCode >= 200 && res.statusCode < 300) {
-                    resolve(respBody);
-                } else {
-                    reject(new Error(`POST ${path} returned ${res.statusCode}: ${respBody.slice(0, 100)}`));
-                }
-            });
-        });
-
-        req.on('error', reject);
-        req.write(body);
-        req.end();
-    });
-}
-
-function getNrToken(port, username, password) {
-    return new Promise((resolve, reject) => {
-        const body = new URLSearchParams({
-            client_id:  'node-red-admin',
-            grant_type: 'password',
-            scope:      '*',
-            username,
-            password: password || ''
-        }).toString();
-
-        const opts = {
-            hostname: 'localhost',
-            port,
-            path:    '/auth/token',
-            method:  'POST',
-            headers: {
-                'Content-Type':   'application/x-www-form-urlencoded',
-                'Content-Length': Buffer.byteLength(body)
-            }
-        };
-
-        const req = http.request(opts, (res) => {
-            let respBody = '';
-            res.on('data', chunk => respBody += chunk);
-            res.on('end', () => {
-                try {
-                    const data = JSON.parse(respBody);
-                    if (data.access_token) {
-                        resolve(data.access_token);
-                    } else {
-                        reject(new Error('No access_token in Node-RED auth response'));
+function writeSensorName(deviceId, name, cb) {
+    if (!sqlite3) { cb('sqlite3 not available'); return; }
+    const db = new sqlite3.Database(DB_PATH, function (err) {
+        if (err) { cb(err.message); return; }
+        db.run(
+            'UPDATE devices SET sensor_name = ? WHERE device_id = ?',
+            [name, deviceId],
+            function (err) {
+                if (err) { db.close(); cb(err.message); return; }
+                // Also upsert sensor_meta.name
+                db.run(
+                    'INSERT INTO sensor_meta (device_id, name) VALUES (?, ?) ON CONFLICT(device_id) DO UPDATE SET name = excluded.name',
+                    [deviceId, name],
+                    function (err2) {
+                        db.close();
+                        cb(err2 ? err2.message : null);
                     }
-                } catch (e) {
-                    reject(new Error(`Node-RED auth parse error: ${respBody.slice(0, 100)}`));
-                }
-            });
-        });
-
-        req.on('error', reject);
-        req.write(body);
-        req.end();
+                );
+            }
+        );
     });
+}
+
+function writeGatewayName(name, cb) {
+    if (!sqlite3) { cb('sqlite3 not available'); return; }
+    const db = new sqlite3.Database(DB_PATH, function (err) {
+        if (err) { cb(err.message); return; }
+        db.run(
+            "INSERT OR REPLACE INTO gateway_config (key, value) VALUES ('gateway_name', ?)",
+            [name],
+            function (err) {
+                db.close();
+                cb(err ? err.message : null);
+            }
+        );
+    });
+}
+
+// ---------------------------------------------------------------
+//  HTTP helpers
+// ---------------------------------------------------------------
+
+function fetchJson(rawUrl, apiKey, cb) {
+    const parsed   = url.parse(rawUrl);
+    const lib      = parsed.protocol === 'https:' ? https : http;
+    const options  = {
+        hostname: parsed.hostname,
+        port:     parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path:     parsed.path,
+        method:   'GET',
+        headers:  { 'Accept': 'application/json', 'X-Gateway-Key': apiKey },
+        rejectUnauthorized: false
+    };
+
+    const req = lib.request(options, function (res) {
+        let data = '';
+        res.on('data', function (c) { data += c; });
+        res.on('end', function () {
+            try { cb(null, JSON.parse(data)); }
+            catch (e) { cb('JSON parse error: ' + e.message); }
+        });
+    });
+    req.on('error', function (e) { cb(e.message); });
+    req.end();
+}
+
+function runSerial(tasks, done) {
+    if (tasks.length === 0) { done(); return; }
+    tasks[0](function () { runSerial(tasks.slice(1), done); });
 }
