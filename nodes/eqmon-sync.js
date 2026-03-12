@@ -254,12 +254,12 @@ function buildDevicesQuery(criteria, hwm, force) {
     }
 
     if (criteria.sensor_type != null) {
-        conditions.push('type = ?');
+        conditions.push('sensor_type = ?');
         params.push(criteria.sensor_type);
     }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
-    const sql = `SELECT device_id, type AS device_type, firmware FROM devices ${where} LIMIT 500`;
+    const sql = `SELECT device_id, sensor_type AS device_type, firmware FROM devices ${where} LIMIT 500`;
     return [sql, params];
 }
 
