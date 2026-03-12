@@ -55,8 +55,13 @@ module.exports = function (RED) {
             const gatewayMac = node.server.gatewayMac || undefined;
             const apiKey     = node.server.credentials && node.server.credentials.apiKey;
 
-            if (!gatewayId || !apiKey) {
-                node.error('eqmon-config is missing gateway_id or API key');
+            if (!apiKey) {
+                node.error('eqmon-config is missing API key');
+                done();
+                return;
+            }
+            if (!gatewayId) {
+                node.error('eqmon-config is missing gateway_id (check gateway_mac in SQLite)');
                 done();
                 return;
             }
@@ -87,7 +92,6 @@ module.exports = function (RED) {
                 const body   = buildBody(syncType, gatewayId, gatewayMac, records);
 
                 msg.eqmon_hwm_pending = buildHwmUpdate(syncType, records);
-                msg.method  = 'POST';
                 msg.url     = url;
                 msg.headers = { 'Content-Type': 'application/json', 'X-Gateway-Key': apiKey };
                 msg.payload = JSON.stringify(body);
@@ -175,16 +179,18 @@ function buildReadingsQuery(criteria, hwm, force) {
     // The /sync/readings endpoint accepts type=1 (env), type=2 (env), type=28 (current).
     // Only include devices whose type is known to the server (1, 2, 28).
     // Vibration sensors (type 82, 111) go through /sync/vibration, not here.
+    // Note: 'devices' table schema varies by gateway firmware — 'type' column may not exist.
+    // Use r.sensor_type from the readings table directly; map vibration types (82, 111) to 1
+    // so they don't get sent via /sync/readings (they belong in /sync/vibration).
     const sql = `
         SELECT r.ts, r.device_id,
-               CASE WHEN d.type IN (1, 2, 28) THEN d.type ELSE 1 END AS sensor_type,
+               CASE WHEN r.sensor_type IN (1, 2, 28) THEN r.sensor_type ELSE 1 END AS sensor_type,
                MAX(CASE WHEN r.metric='firmware'     THEN r.value END) AS firmware,
                MAX(CASE WHEN r.metric='temperature'  THEN r.value END) AS temperature,
                MAX(CASE WHEN r.metric='humidity'     THEN r.value END) AS humidity,
                MAX(CASE WHEN r.metric='battery_v'    THEN r.value END) AS battery_v,
                MAX(CASE WHEN r.metric='battery_pct'  THEN r.value END) AS battery_pct
         FROM readings r
-        LEFT JOIN devices d ON r.device_id = d.device_id
         ${where}
         GROUP BY r.ts, r.device_id
         ORDER BY r.ts ASC

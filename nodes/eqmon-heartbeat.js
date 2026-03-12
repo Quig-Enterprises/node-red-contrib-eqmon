@@ -82,7 +82,6 @@ module.exports = function (RED) {
                 const url = baseUrl.replace(/\/$/, '') + '/gateway-config';
 
                 const msg = {
-                    method:  'POST',
                     url:     url,
                     headers: {
                         'Content-Type':  'application/json',
