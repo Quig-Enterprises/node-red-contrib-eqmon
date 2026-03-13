@@ -149,8 +149,11 @@ function buildReadingsQuery(criteria, hwm, force) {
     const conditions = [];
     const params = [];
 
-    // Always exclude gateway health rows
+    // Always exclude gateway health rows and unsupported sensor types
+    // Server accepts type 1 (env) and 28 (current) via /sync/readings
+    // Type 2 (digital input) and vibration types (82, 111) are not supported here
     conditions.push("r.device_id != 'gateway'");
+    conditions.push('r.sensor_type IN (1, 28)');
 
     // HWM per device or global minimum
     if (!force) {
@@ -179,15 +182,10 @@ function buildReadingsQuery(criteria, hwm, force) {
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     // Pivot wide: group by ts+device to build one row per reading.
-    // The /sync/readings endpoint accepts type=1 (env), type=2 (env), type=28 (current).
-    // Only include devices whose type is known to the server (1, 2, 28).
-    // Vibration sensors (type 82, 111) go through /sync/vibration, not here.
-    // Note: 'devices' table schema varies by gateway firmware — 'type' column may not exist.
-    // Use r.sensor_type from the readings table directly; map vibration types (82, 111) to 1
-    // so they don't get sent via /sync/readings (they belong in /sync/vibration).
+    // Server accepts type 1 (env) and 28 (current) via /sync/readings only.
     const sql = `
         SELECT r.ts, r.device_id,
-               CASE WHEN r.sensor_type IN (1, 2, 28) THEN r.sensor_type ELSE 1 END AS sensor_type,
+               r.sensor_type,
                MAX(CASE WHEN r.metric='firmware'     THEN r.value END) AS firmware,
                MAX(CASE WHEN r.metric='temperature'  THEN r.value END) AS temperature,
                MAX(CASE WHEN r.metric='humidity'     THEN r.value END) AS humidity,
