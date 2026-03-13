@@ -149,6 +149,9 @@ function buildReadingsQuery(criteria, hwm, force) {
     const conditions = [];
     const params = [];
 
+    // Always exclude gateway health rows
+    conditions.push("r.device_id != 'gateway'");
+
     // HWM per device or global minimum
     if (!force) {
         const globalHwm = criteria.since || getGlobalHwm(hwm, 'readings') || 0;
